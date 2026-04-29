@@ -1,6 +1,7 @@
 import cors from "cors";
 import crypto from "crypto";
 import express from "express";
+import rateLimit from "express-rate-limit";
 import { pool } from "./db";
 
 const app = express();
@@ -8,6 +9,14 @@ const port = Number(process.env.PORT || 3001);
 
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
+app.use(
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 300,
+    standardHeaders: true,
+    legacyHeaders: false
+  })
+);
 
 const asyncHandler =
   (
@@ -347,7 +356,7 @@ app.post(
         : null;
 
       if (normalizedUserA === normalizedUserB) {
-        res.status(400).json({ error: "invalid_fields" });
+        res.status(400).json({ error: "same_user_pairing" });
         return;
       }
 
