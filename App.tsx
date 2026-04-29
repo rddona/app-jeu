@@ -28,9 +28,11 @@ import { extractSignals, pickNextQuestion } from "./src/engine/questionEngine";
 import {
   appendAnswer,
   flushPending,
+  flushPendingSessions,
   loadAnswers,
   loadProgress,
   queuePending,
+  queuePendingSession,
   resetAll,
   saveProgress
 } from "./src/services/persistence";
@@ -149,6 +151,7 @@ export default function App() {
       }
 
       if (isApiConfigured()) {
+        await flushPendingSessions(createSession);
         await flushPending(postAnswer);
       }
 
@@ -261,12 +264,16 @@ export default function App() {
     await saveProgress(nextProgress);
 
     if (isApiConfigured()) {
-      await createSession({
+      const sessionPayload = {
         user_id: userId,
         person_name: trimmedName,
         session_id: sessionId,
         started_at: now
-      });
+      };
+      const response = await createSession(sessionPayload);
+      if (!response) {
+        await queuePendingSession(sessionPayload);
+      }
     }
   };
 
@@ -301,6 +308,7 @@ export default function App() {
     const activeDelta = Number.isNaN(startedAt)
       ? 0
       : Math.max(0, now.getTime() - startedAt);
+    const totalActiveMs = progress.total_active_ms + activeDelta;
 
     const responseText = skipped
       ? ""
@@ -317,7 +325,8 @@ export default function App() {
       free_text: skipped ? "" : trimmedFreeText,
       reponse: responseText,
       timestamp: now.toISOString(),
-      skipped
+      skipped,
+      total_active_ms: totalActiveMs
     };
 
     setSelectedOption(null);
@@ -327,6 +336,7 @@ export default function App() {
     await appendAnswer(record);
 
     if (isApiConfigured()) {
+      await flushPendingSessions(createSession);
       const ok = await postAnswer(record);
       if (!ok) {
         await queuePending(record);
@@ -349,7 +359,7 @@ export default function App() {
 
     const nextProgress: ProgressState = {
       ...progress,
-      total_active_ms: progress.total_active_ms + activeDelta,
+      total_active_ms: totalActiveMs,
       section_index: nextStage === "recap" ? QUESTION_SECTIONS.length : nextSectionIndex,
       question_index: nextStage === "recap" ? 0 : nextQuestionIndex,
       answered_count: progress.answered_count + (skipped ? 0 : 1),

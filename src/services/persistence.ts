@@ -1,9 +1,10 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { AnswerRecord, ProgressState } from "../types";
+import { AnswerRecord, ProgressState, SessionPayload } from "../types";
 
 const ANSWERS_KEY = "rdreponses:answers";
 const PROGRESS_KEY = "rdreponses:progress";
 const PENDING_KEY = "rdreponses:pending";
+const PENDING_SESSIONS_KEY = "rdreponses:pending-sessions";
 
 const readJson = async <T,>(key: string, fallback: T): Promise<T> => {
   try {
@@ -44,6 +45,37 @@ export const queuePending = async (answer: AnswerRecord) => {
   await writeJson(PENDING_KEY, list);
 };
 
+export const loadPendingSessions = async () =>
+  readJson<SessionPayload[]>(PENDING_SESSIONS_KEY, []);
+
+export const queuePendingSession = async (payload: SessionPayload) => {
+  const list = await loadPendingSessions();
+  if (list.some((session) => session.session_id === payload.session_id)) {
+    return;
+  }
+  list.push(payload);
+  await writeJson(PENDING_SESSIONS_KEY, list);
+};
+
+export const flushPendingSessions = async (
+  sendFn: (payload: SessionPayload) => Promise<{ session_id: string } | null>
+) => {
+  const pending = await loadPendingSessions();
+  if (pending.length === 0) {
+    return;
+  }
+
+  const remaining: SessionPayload[] = [];
+  for (const payload of pending) {
+    const ok = await sendFn(payload);
+    if (!ok) {
+      remaining.push(payload);
+    }
+  }
+
+  await writeJson(PENDING_SESSIONS_KEY, remaining);
+};
+
 export const flushPending = async (
   sendFn: (answer: AnswerRecord) => Promise<boolean>
 ) => {
@@ -64,5 +96,10 @@ export const flushPending = async (
 };
 
 export const resetAll = async () => {
-  await AsyncStorage.multiRemove([ANSWERS_KEY, PROGRESS_KEY, PENDING_KEY]);
+  await AsyncStorage.multiRemove([
+    ANSWERS_KEY,
+    PROGRESS_KEY,
+    PENDING_KEY,
+    PENDING_SESSIONS_KEY
+  ]);
 };

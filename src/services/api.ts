@@ -1,4 +1,9 @@
-import { AdminQuestionSummary, AdminUserSummary, AnswerRecord } from "../types";
+import {
+  AdminQuestionSummary,
+  AdminUserSummary,
+  AnswerRecord,
+  SessionPayload
+} from "../types";
 
 const API_BASE_URL = (process.env.EXPO_PUBLIC_API_BASE_URL || "").trim();
 
@@ -35,12 +40,7 @@ export const postAnswer = async (answer: AnswerRecord) => {
   return Boolean(response);
 };
 
-export const createSession = async (payload: {
-  user_id: string;
-  person_name: string;
-  session_id: string;
-  started_at: string;
-}) => {
+export const createSession = async (payload: SessionPayload) => {
   return request<{ session_id: string }>("/sessions", {
     method: "POST",
     headers: {

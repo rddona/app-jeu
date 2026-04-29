@@ -1,6 +1,7 @@
 import cors from "cors";
 import crypto from "crypto";
 import express from "express";
+import rateLimit from "express-rate-limit";
 import { pool } from "./db";
 
 const app = express();
@@ -8,6 +9,14 @@ const port = Number(process.env.PORT || 3001);
 
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
+app.use(
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 300,
+    standardHeaders: true,
+    legacyHeaders: false
+  })
+);
 
 const asyncHandler =
   (
@@ -26,6 +35,22 @@ const toNumber = (value: unknown) => {
   return Number.isNaN(parsed) ? 0 : parsed;
 };
 
+const isNonEmptyString = (value: unknown): value is string =>
+  typeof value === "string" && value.trim().length > 0;
+
+const isValidTimestamp = (value: string) => !Number.isNaN(Date.parse(value));
+
+const parseNonNegativeNumber = (value: unknown) => {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return null;
+  }
+  return parsed;
+};
+
 type AdminUserRow = {
   user_id: string;
   name: string;
@@ -40,22 +65,48 @@ app.get("/health", (_req, res) => {
 app.post(
   "/sessions",
   asyncHandler(async (req, res) => {
-    const { user_id, person_name, session_id, started_at } = req.body || {};
-    if (!user_id || !person_name || !session_id || !started_at) {
+    const { user_id, person_name, session_id, started_at, total_active_ms } =
+      req.body || {};
+    if (
+      !isNonEmptyString(user_id) ||
+      !isNonEmptyString(person_name) ||
+      !isNonEmptyString(session_id) ||
+      !isNonEmptyString(started_at)
+    ) {
       res.status(400).json({ error: "missing_fields" });
       return;
     }
+    const normalizedStartedAt = started_at.trim();
+    if (!isValidTimestamp(normalizedStartedAt)) {
+      res.status(400).json({ error: "invalid_fields" });
+      return;
+    }
+    const totalActiveMs = parseNonNegativeNumber(total_active_ms);
+    if (total_active_ms !== undefined && totalActiveMs === null) {
+      res.status(400).json({ error: "invalid_fields" });
+      return;
+    }
+
+    const normalizedUserId = user_id.trim();
+    const normalizedPersonName = person_name.trim();
+    const normalizedSessionId = session_id.trim();
+    const initialActiveMs = totalActiveMs ?? 0;
 
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
       await client.query(
         "INSERT INTO users (user_id, display_name) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET display_name = EXCLUDED.display_name",
-        [user_id, person_name]
+        [normalizedUserId, normalizedPersonName]
       );
       await client.query(
-        "INSERT INTO sessions (session_id, user_id, started_at) VALUES ($1, $2, $3) ON CONFLICT (session_id) DO UPDATE SET user_id = EXCLUDED.user_id, started_at = EXCLUDED.started_at",
-        [session_id, user_id, started_at]
+        "INSERT INTO sessions (session_id, user_id, started_at, total_active_ms) VALUES ($1, $2, $3, $4) ON CONFLICT (session_id) DO UPDATE SET user_id = EXCLUDED.user_id, started_at = EXCLUDED.started_at, total_active_ms = GREATEST(sessions.total_active_ms, EXCLUDED.total_active_ms)",
+        [
+          normalizedSessionId,
+          normalizedUserId,
+          normalizedStartedAt,
+          initialActiveMs
+        ]
       );
       await client.query("COMMIT");
     } catch (error) {
@@ -65,7 +116,7 @@ app.post(
       client.release();
     }
 
-    res.json({ session_id });
+    res.json({ session_id: normalizedSessionId });
   })
 );
 
@@ -127,23 +178,68 @@ app.post(
       free_text,
       reponse,
       timestamp,
-      skipped
+      skipped,
+      total_active_ms
     } = req.body || {};
 
     if (
-      !reponse_id ||
-      !user_id ||
-      !session_id ||
-      !question_id ||
-      !section_id ||
-      !question_text ||
-      !timestamp
+      !isNonEmptyString(reponse_id) ||
+      !isNonEmptyString(user_id) ||
+      !isNonEmptyString(session_id) ||
+      !isNonEmptyString(question_id) ||
+      !isNonEmptyString(section_id) ||
+      !isNonEmptyString(question_text) ||
+      !isNonEmptyString(timestamp)
     ) {
       res.status(400).json({ error: "missing_fields" });
       return;
     }
 
-    if (typeof free_text === "string" && free_text.length > 200) {
+    const normalizedTimestamp = timestamp.trim();
+    if (!isValidTimestamp(normalizedTimestamp)) {
+      res.status(400).json({ error: "invalid_fields" });
+      return;
+    }
+
+    if (
+      selected_option !== undefined &&
+      selected_option !== null &&
+      typeof selected_option !== "string"
+    ) {
+      res.status(400).json({ error: "invalid_fields" });
+      return;
+    }
+    if (free_text !== undefined && free_text !== null && typeof free_text !== "string") {
+      res.status(400).json({ error: "invalid_fields" });
+      return;
+    }
+    if (reponse !== undefined && reponse !== null && typeof reponse !== "string") {
+      res.status(400).json({ error: "invalid_fields" });
+      return;
+    }
+    if (skipped !== undefined && typeof skipped !== "boolean") {
+      res.status(400).json({ error: "invalid_fields" });
+      return;
+    }
+
+    const normalizedReponseId = reponse_id.trim();
+    const normalizedUserId = user_id.trim();
+    const normalizedSessionId = session_id.trim();
+    const normalizedQuestionId = question_id.trim();
+    const normalizedSectionId = section_id.trim();
+    const normalizedQuestionText = question_text.trim();
+    const responseText = typeof reponse === "string" ? reponse : "";
+    const freeTextValue = typeof free_text === "string" ? free_text : "";
+    const selectedOptionValue =
+      typeof selected_option === "string" ? selected_option : null;
+    const skippedValue = Boolean(skipped);
+    const totalActiveMs = parseNonNegativeNumber(total_active_ms);
+    if (total_active_ms !== undefined && totalActiveMs === null) {
+      res.status(400).json({ error: "invalid_fields" });
+      return;
+    }
+
+    if (freeTextValue.length > 200) {
       res.status(400).json({ error: "free_text_too_long" });
       return;
     }
@@ -153,24 +249,30 @@ app.post(
       await client.query("BEGIN");
       await client.query(
         "INSERT INTO questions (question_id, section_id, question_text) VALUES ($1, $2, $3) ON CONFLICT (question_id) DO UPDATE SET section_id = EXCLUDED.section_id, question_text = EXCLUDED.question_text",
-        [question_id, section_id, question_text]
+        [normalizedQuestionId, normalizedSectionId, normalizedQuestionText]
       );
       await client.query(
         "INSERT INTO answers (reponse_id, user_id, session_id, question_id, section_id, question_text, reponse, selected_option, free_text, skipped, timestamp) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT (reponse_id) DO NOTHING",
         [
-          reponse_id,
-          user_id,
-          session_id,
-          question_id,
-          section_id,
-          question_text,
-          reponse || "",
-          selected_option || null,
-          free_text || "",
-          Boolean(skipped),
-          timestamp
+          normalizedReponseId,
+          normalizedUserId,
+          normalizedSessionId,
+          normalizedQuestionId,
+          normalizedSectionId,
+          normalizedQuestionText,
+          responseText,
+          selectedOptionValue,
+          freeTextValue,
+          skippedValue,
+          normalizedTimestamp
         ]
       );
+      if (totalActiveMs !== null) {
+        await client.query(
+          "UPDATE sessions SET total_active_ms = GREATEST(total_active_ms, $1) WHERE session_id = $2",
+          [totalActiveMs, normalizedSessionId]
+        );
+      }
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -232,22 +334,41 @@ app.get(
 
 app.post(
   "/admin/pairings",
-  asyncHandler(async (req, res) => {
-    const { user_id_a, user_id_b, session_id } = req.body || {};
-    if (!user_id_a || !user_id_b) {
-      res.status(400).json({ error: "missing_fields" });
-      return;
-    }
+    asyncHandler(async (req, res) => {
+      const { user_id_a, user_id_b, session_id } = req.body || {};
+      if (!isNonEmptyString(user_id_a) || !isNonEmptyString(user_id_b)) {
+        res.status(400).json({ error: "missing_fields" });
+        return;
+      }
+      if (
+        session_id !== undefined &&
+        session_id !== null &&
+        !isNonEmptyString(session_id)
+      ) {
+        res.status(400).json({ error: "invalid_fields" });
+        return;
+      }
+
+      const normalizedUserA = user_id_a.trim();
+      const normalizedUserB = user_id_b.trim();
+      const normalizedSessionId = isNonEmptyString(session_id)
+        ? session_id.trim()
+        : null;
+
+      if (normalizedUserA === normalizedUserB) {
+        res.status(400).json({ error: "cannot_pair_same_user" });
+        return;
+      }
 
     const pairingId =
       typeof crypto.randomUUID === "function"
         ? crypto.randomUUID()
         : `pair-${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
 
-    await pool.query(
-      "INSERT INTO pairings (pairing_id, user_id_a, user_id_b, session_id) VALUES ($1, $2, $3, $4)",
-      [pairingId, user_id_a, user_id_b, session_id || null]
-    );
+      await pool.query(
+        "INSERT INTO pairings (pairing_id, user_id_a, user_id_b, session_id) VALUES ($1, $2, $3, $4)",
+        [pairingId, normalizedUserA, normalizedUserB, normalizedSessionId]
+      );
 
     res.status(201).json({ pairing_id: pairingId });
   })
