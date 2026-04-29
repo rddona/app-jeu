@@ -17,6 +17,7 @@ export type AnswerRecord = {
   reponse: string;
   timestamp: string;
   skipped: boolean;
+  total_active_ms?: number;
 };
 
 export type ProgressState = {
@@ -29,6 +30,14 @@ export type ProgressState = {
   section_index: number;
   question_index: number;
   answered_count: number;
+};
+
+export type SessionPayload = {
+  user_id: string;
+  person_name: string;
+  session_id: string;
+  started_at: string;
+  total_active_ms?: number;
 };
 
 export type AdminUserSummary = {
