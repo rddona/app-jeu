@@ -356,7 +356,7 @@ app.post(
         : null;
 
       if (normalizedUserA === normalizedUserB) {
-        res.status(400).json({ error: "same_user_pairing" });
+        res.status(400).json({ error: "cannot_pair_same_user" });
         return;
       }
 
